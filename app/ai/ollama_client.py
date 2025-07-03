@@ -35,12 +35,8 @@ class OllamaClient:
             "max_tokens": max_tokens
         }
         
-        response = requests.post(url, json=payload)
+        response = requests.post(url, json=payload, stream=False)
         response.raise_for_status()
         result = response.json()
         
         return result.get("response", "")
-    
-    def get_batch_embeddings(self, texts: List[str], model: str = EMBEDDING_MODEL) -> List[List[float]]:
-        """Generate embeddings for multiple texts."""
-        return [self.get_embedding(text, model) for text in texts]

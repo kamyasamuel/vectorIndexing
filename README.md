@@ -1,6 +1,6 @@
 # Vector Indexing System
 
-A powerful document indexing and retrieval system that uses vector embeddings and Ollama for semantic search and question answering. This system can process various document formats (PDF, DOCX, TXT, MD) and provides both CLI and REST API interfaces.
+A powerful document indexing and retrieval system that uses vector embeddings and Ollama for semantic search and question answering. This system can process various document formats (PDF, DOCX, TXT, MD) and provides a minimalist modern UI, CLI and REST API interfaces.
 
 ## Features
 
@@ -8,10 +8,12 @@ A powerful document indexing and retrieval system that uses vector embeddings an
 - **Vector Embeddings**: Uses Ollama for generating high-quality embeddings
 - **Semantic Search**: Find relevant documents using similarity search
 - **Question Answering**: RAG (Retrieval-Augmented Generation) capabilities
+- **Modern UI**: Minimalist React-based user interface with animations
 - **REST API**: FastAPI-based web service
 - **CLI Interface**: Command-line tools for indexing and querying
 - **Chunking Strategy**: Intelligent document chunking with configurable overlap
 - **Metadata Storage**: Persistent storage for document metadata
+- **Multiple Search Modes**: Simple search, question answering, and metadata-based filtering
 
 ## Architecture
 
@@ -39,6 +41,13 @@ vectorIndexing/
 │       ├── docx_loader.py # DOCX document processing
 │       ├── text_loader.py # Text file processing
 │       └── audio_loader.py # Audio file processing
+│
+├── frontend/              # React-based UI
+│   ├── package.json       # Frontend dependencies
+│   ├── tsconfig.json      # TypeScript configuration
+│   └── src/
+│       ├── components/    # UI components
+│       └── services/      # API services
 │
 ├── storage/               # Data persistence layer
 │   ├── vector_store.py    # Vector database operations
@@ -121,6 +130,16 @@ python main.py --index /path/to/documents/
 python main.py --serve
 ```
 
+**Start the frontend UI**:
+```bash
+# Install dependencies
+cd frontend
+npm install
+
+# Start the development server
+npm start
+```
+
 ### REST API
 
 Start the server and access the API at `http://localhost:8000`
@@ -143,6 +162,195 @@ curl -X POST "http://localhost:8000/api/answer" \
      -d '{"query": "What are the benefits of neural networks?", "context_window": 5}'
 ```
 
+**Upload and index a file**:
+```bash
+curl -X POST "http://localhost:8000/api/index/file" \
+     -F "file=@/path/to/document.pdf"
+```
+
+## Frontend UI
+
+The system includes a minimalist, modern UI for intuitive interaction with the vector search functionality.
+
+![UI Screenshot](https://via.placeholder.com/800x450?text=Vector+Search+UI)
+
+### Frontend Features
+
+- **Minimalist Design**: Clean interface with focus on current search/operation
+- **Three Query Modes**:
+  - Simple semantic search
+  - Question answering (RAG)
+  - Metadata-filtered search
+- **Real-time Animations**:
+  - Elegant loading states for search operations
+  - Vector visualization for result similarity
+  - Document preview transitions
+- **System Status Monitor**: Compact, expandable dashboard for system metrics
+
+### UI Screenshot Walkthrough
+
+#### Search Interface
+![Search Interface](https://via.placeholder.com/800x450?text=Search+Interface)
+*The main search interface with query mode selection*
+
+#### Results View
+![Results View](https://via.placeholder.com/800x450?text=Results+View)
+*Document results with similarity visualization*
+
+#### System Monitor
+![System Monitor](https://via.placeholder.com/800x450?text=System+Monitor)
+*Expandable system status dashboard*
+
+### Tech Stack
+
+- **Frontend**: React with TypeScript
+- **Styling**: TailwindCSS for minimal, responsive design
+- **Animations**: Framer Motion for fluid transitions
+- **Charts**: D3.js for vector visualizations
+- **API Integration**: Axios for backend communication
+
+### Installation & Setup
+
+```bash
+# Navigate to the frontend directory
+cd frontend
+
+# Install dependencies
+npm install
+
+# Start development server
+npm run dev
+```
+
+Default frontend URL: http://localhost:3000
+
+## System Usage Guide
+
+### Setting Up Your Document Collection
+
+For optimal performance when building your knowledge base:
+
+1. **Prepare your documents**:
+   - Remove unnecessary headers, footers, and metadata
+   - Split very large documents (100+ pages) into logical sections
+   - Ensure text is properly encoded and doesn't contain OCR errors
+
+2. **Organize document directories**:
+   ```
+   documents/
+   ├── technical/          # Technical documentation
+   ├── research-papers/    # Academic papers
+   └── knowledge-base/     # General knowledge
+   ```
+
+3. **Batch indexing**:
+   ```bash
+   # Index specific document types
+   find ./documents -name "*.pdf" | xargs -I{} python main.py --index {}
+   
+   # Index recursively with specific naming
+   python main.py --index ./documents/research-papers
+   ```
+
+### Querying Strategies
+
+**Simple Search vs. Question Answering**:
+
+- **Use search** for finding relevant documents:
+  ```bash
+  curl -X POST "http://localhost:8000/api/search" \
+       -H "Content-Type: application/json" \
+       -d '{"query": "tornado", "top_k": 5}'
+  ```
+
+- **Use question answering** for specific information:
+  ```bash
+  curl -X POST "http://localhost:8000/api/answer" \
+       -H "Content-Type: application/json" \
+       -d '{"query": "What are the key differences between random forests and gradient boosting?", "context_window": 5}'
+  ```
+
+**Filter by Metadata**:
+```bash
+curl -X POST "http://localhost:8000/api/search" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "query": "neural networks",
+       "top_k": 5,
+       "filters": {
+         "file_type": "pdf",
+         "tags": ["research", "ai"]
+       }
+     }'
+```
+
+### Monitoring and Maintenance
+
+**Check System Status**:
+```bash
+# View indexed document count
+sqlite3 data/metadata.db "SELECT COUNT(*) FROM documents;"
+
+# Check vector storage size
+du -sh data/vector_store/
+```
+
+**Backup Your Data**:
+```bash
+# Backup metadata database
+cp data/metadata.db data/backups/metadata_$(date +%Y%m%d).db
+
+# Backup vector store
+tar -czf data/backups/vector_store_$(date +%Y%m%d).tar.gz data/vector_store/
+```
+
+### Integration Examples
+
+**Python Client**:
+```python
+import requests
+import json
+
+def search_documents(query, top_k=5):
+    url = "http://localhost:8000/api/search"
+    payload = {
+        "query": query,
+        "top_k": top_k
+    }
+    response = requests.post(url, json=payload)
+    return response.json()
+
+def answer_question(query, context_window=5):
+    url = "http://localhost:8000/api/answer"
+    payload = {
+        "query": query,
+        "context_window": context_window
+    }
+    response = requests.post(url, json=payload)
+    return response.json()
+
+# Example usage
+results = search_documents("quantum computing algorithms")
+answer = answer_question("How does Shor's algorithm work?")
+```
+
+**Bash Script for Batch Processing**:
+```bash
+#!/bin/bash
+# batch_index.sh - Index multiple directories
+
+DIRS=("./docs/technical" "./docs/manuals" "./docs/research")
+
+for dir in "${DIRS[@]}"; do
+  echo "Indexing $dir..."
+  python main.py --index "$dir"
+  echo "Finished indexing $dir"
+done
+
+echo "Starting API server..."
+python main.py --serve
+```
+
 ## Configuration
 
 The system can be configured through environment variables or the `config.py` file:
@@ -159,10 +367,35 @@ The system can be configured through environment variables or the `config.py` fi
 
 ## Supported File Formats
 
-- **PDF**: `.pdf` files using PyMuPDF
+- **PDF**: `.pdf` files with hybrid extraction (PyPDF2 + OCR fallback)
 - **Word Documents**: `.docx`, `.doc` files using python-docx
 - **Text Files**: `.txt`, `.md`, `.rst` files
 - **Audio**: `.mp3`, `.wav` files (with transcription support)
+
+### Advanced PDF Processing
+
+The system uses a robust two-step approach for PDF processing:
+
+1. **Standard Text Extraction**: First attempts to extract text directly using PyPDF2
+2. **OCR Fallback**: For scanned documents or problematic PDFs that yield limited text, the system automatically falls back to OCR using Tesseract
+
+This hybrid approach ensures high-quality text extraction from various PDF types including:
+- Native digital PDFs with embedded text
+- Scanned documents
+- Image-heavy PDFs
+- Documents with complex layouts
+
+**Note**: For OCR functionality to work, you must install Tesseract OCR on your system:
+```bash
+# Ubuntu/Debian
+sudo apt-get install -y tesseract-ocr
+
+# macOS with Homebrew
+brew install tesseract
+
+# Windows
+# Download installer from: https://github.com/UB-Mannheim/tesseract/wiki
+```
 
 ## How It Works
 
@@ -239,11 +472,63 @@ pytest tests/
 
 ## License
 
+## User Interface
+
+The Vector Indexing System includes a modern, minimalist frontend built with React, TypeScript, and Tailwind CSS. The UI focuses on the current operation, bringing the most important elements to the forefront while minimizing distractions.
+
+### UI Features
+
+- **Three Query Modes**: 
+  - **Semantic Search**: Find documents by semantic similarity to queries
+  - **Question & Answer**: Get direct answers with cited sources
+  - **Metadata Search**: Filter documents by various metadata properties
+
+- **Animated Transitions**: Smooth animations between views and during loading states provide visual feedback for operations in progress
+
+- **System Status View**: A slide-out drawer shows detailed system information including indexed document count, resource usage, and system actions
+
+- **File Upload**: Drag-and-drop interface for document uploading with progress indicators and feedback
+
+### UI Screenshots
+
+**Semantic Search View**
+![Semantic Search UI](https://example.com/screenshots/semantic-search.png)
+
+**Question & Answer View**
+![Question Answer UI](https://example.com/screenshots/question-answer.png)
+
+**Metadata Search View**
+![Metadata Search UI](https://example.com/screenshots/metadata-search.png)
+
+**System Status View**
+![System Status UI](https://example.com/screenshots/system-status.png)
+
+### Running the Frontend
+
+1. Navigate to the frontend directory:
+   ```bash
+   cd frontend
+   ```
+
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+
+3. Start the development server:
+   ```bash
+   npm start
+   ```
+
+The UI will be available at `http://localhost:3001` and will automatically connect to the backend API running at `http://localhost:8000/api`.
+
 This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## Acknowledgments
 
 - **Ollama** for providing local LLM capabilities
 - **FastAPI** for the web framework
-- **PyMuPDF** for PDF processing
+- **PyPDF2** for PDF processing
+- **React** and **Framer Motion** for the UI
+- **Tailwind CSS** for styling
 - **Granite Models** for embeddings and completions

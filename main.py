@@ -1,11 +1,22 @@
 import argparse
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 from app.core.indexer import DocumentIndexer
-from app.api.controllers import router
+from app.api.routes import router
 
 app = FastAPI(title="Textual Data Indexer API")
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://localhost:3001"],  # Allows the frontend to access the API
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
+
 app.include_router(router, prefix="/api")
 
 @app.get("/")
@@ -16,6 +27,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Textual Data Indexer")
     parser.add_argument("--index", help="Index a file or directory")
     parser.add_argument("--serve", action="store_true", help="Start the API server")
+    parser.add_argument("--dev", action="store_true", help="Run server in development mode with auto-reload")
     
     args = parser.parse_args()
     
@@ -35,6 +47,11 @@ if __name__ == "__main__":
         else:
             print(f"Path not found: {path}")
     
-    if args.serve:
+    if args.serve or args.dev:
         print("Starting API server...")
-        uvicorn.run(app, host="0.0.0.0", port=8000)
+        if args.dev:
+            print("Development mode: Auto-reload enabled")
+            # Use string reference to app to enable auto-reload
+            uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+        else:
+            uvicorn.run(app, host="0.0.0.0", port=8000)

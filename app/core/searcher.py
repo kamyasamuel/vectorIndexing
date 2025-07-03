@@ -51,12 +51,12 @@ class DocumentSearcher:
         # Create prompt for the LLM
         prompt = f"""Answer the question based on the following context:
         
-Context:
-{context}
+        Context:
+        {context}
 
-Question: {query}
+        Question: {query}
 
-Answer:"""
+        Answer:"""
         
         # Get completion from Ollama
         answer = self.ollama_client.get_completion(prompt)

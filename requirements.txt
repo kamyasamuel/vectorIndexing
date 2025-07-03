@@ -3,7 +3,16 @@ uvicorn[standard]>=0.24.0
 python-dotenv>=1.0.0
 numpy>=1.26.0
 requests>=2.31.0
-pymupdf>=1.23.0  # For PDF loading
+PyPDF2>=3.0.0  # For PDF loading (replaced PyMuPDF)
 python-docx>=1.1.0  # For DOCX loading
 pydantic>=2.5.0
 setuptools>=68.0.0  # Required for Python 3.12+
+pytesseract>=0.3.10  # For OCR text extraction
+pdf2image>=1.16.3  # For converting PDF to images
+pillow>=10.0.0  # For image processing
+beautifulsoup4>=4.12.0  # For HTML parsing
+python-multipart>=0.0.6  # For form data handling
+# Note: You'll also need to install tesseract-ocr on your system:
+# Ubuntu/Debian: sudo apt-get install -y tesseract-ocr
+# macOS: brew install tesseract
+# Windows: https://github.com/UB-Mannheim/tesseract/wiki

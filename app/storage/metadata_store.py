@@ -26,10 +26,7 @@ class MetadataStore:
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS documents (
             id TEXT PRIMARY KEY,
-            title TEXT,
-            source TEXT,
-            file_type TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            content TEXT,
             metadata TEXT
         )
         ''')
@@ -46,16 +43,16 @@ class MetadataStore:
         conn.commit()
         conn.close()
     
-    def add_document(self, document_id: str, title: str, source: str, 
-                    file_type: str, metadata: Dict[str, Any]) -> str:
-        """Add document metadata to the database."""
+    def add_document(self, document_id: str, content: str, metadata: Dict[str, Any]) -> str:
+        """Add document to the database or update if it already exists."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         try:
+            # Using REPLACE to handle the case where the document already exists
             cursor.execute(
-                "INSERT INTO documents (id, title, source, file_type, metadata) VALUES (?, ?, ?, ?, ?)",
-                (document_id, title, source, file_type, json.dumps(metadata))
+                "INSERT OR REPLACE INTO documents (id, content, metadata) VALUES (?, ?, ?)",
+                (document_id, content, json.dumps(metadata))
             )
             
             # Add tags if present
