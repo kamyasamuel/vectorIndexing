@@ -1,5 +1,6 @@
 from typing import List, Dict, Any, Optional
 import numpy as np
+import json
 
 from app.core.embedder import DocumentEmbedder
 from app.storage.vector_store import VectorStore
@@ -36,49 +37,68 @@ class DocumentSearcher:
     
     def answer_question(self, query: str, context_window: int = 5) -> Dict[str, Any]:
         """Answer a question using retrieved context."""
-        # Get relevant chunks
-        chunks = self.similarity_search(query, context_window)
-        
-        if not chunks:
+        try:
+            # Get relevant chunks
+            chunks = self.similarity_search(query, context_window)
+            
+            if not chunks:
+                return {
+                    "answer": "I couldn't find any relevant information to answer your question.",
+                    "sources": []
+                }
+            
+            # Format context for the LLM
+            context = "\n\n".join([chunk["content"] for chunk in chunks])
+            
+            # Create prompt for the LLM
+            prompt = f"""Answer the question based on the following context:
+            
+            Context:
+            {context}
+
+            Question: {query}
+
+            Answer:"""
+            
+            # Get completion from Ollama
+            answer = self.ollama_client.get_completion(prompt)
+            
+            # Return answer with source references
+            sources = []
+            for chunk in chunks:
+                document_id = chunk["document_id"]
+                document = self.vector_store.get_document_by_id(document_id)
+                
+                if document:
+                    # Safely extract metadata
+                    metadata = {}
+                    if isinstance(document.get("metadata"), dict):
+                        metadata = document["metadata"]
+                    elif isinstance(document.get("metadata"), str):
+                        try:
+                            metadata = json.loads(document["metadata"])
+                        except json.JSONDecodeError:
+                            metadata = {"filename": "Unknown"}
+                            
+                    filename = metadata.get("filename", "Unknown")
+                    
+                    sources.append({
+                        "id": chunk["id"],
+                        "document_id": document_id,
+                        "document_title": filename,
+                        "similarity": chunk["similarity"]
+                    })
+            
             return {
-                "answer": "I couldn't find any relevant information to answer your question.",
+                "answer": answer,
+                "sources": sources
+            }
+        except Exception as e:
+            print(f"Error in answer_question: {str(e)}")
+            return {
+                "answer": f"An error occurred while processing your query: {str(e)}",
                 "sources": []
             }
-        
-        # Format context for the LLM
-        context = "\n\n".join([chunk["content"] for chunk in chunks])
-        
-        # Create prompt for the LLM
-        prompt = f"""Answer the question based on the following context:
-        
-        Context:
-        {context}
-
-        Question: {query}
-
-        Answer:"""
-        
-        # Get completion from Ollama
-        answer = self.ollama_client.get_completion(prompt)
-        
-        # Return answer with source references
-        sources = []
-        for chunk in chunks:
-            document_id = chunk["document_id"]
-            document = self.vector_store.get_document_by_id(document_id)
-            
-            if document:
-                sources.append({
-                    "id": chunk["id"],
-                    "document_id": document_id,
-                    "document_title": document.get("metadata", {}).get("filename", "Unknown"),
-                    "similarity": chunk["similarity"]
-                })
-        
-        return {
-            "answer": answer,
-            "sources": sources
-        }
     
     def filter_by_metadata(self, query: str, filters: Dict[str, Any], top_k: int = 5) -> List[Dict[str, Any]]:
         """Search with metadata filtering."""

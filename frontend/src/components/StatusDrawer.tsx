@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 
 interface StatusDrawerProps {
-  onClose: () => void;
+  onClose?: () => void;
+  permanent?: boolean;
 }
 
 // Simulated system data (in a real app, this would come from a backend API)
@@ -16,7 +17,7 @@ interface SystemStatus {
   uptime: string;
 }
 
-const StatusDrawer: React.FC<StatusDrawerProps> = ({ onClose }) => {
+const StatusDrawer: React.FC<StatusDrawerProps> = ({ onClose, permanent = false }) => {
   const [systemStatus, setSystemStatus] = useState<SystemStatus>({
     totalDocuments: 0,
     vectorCount: 0,
@@ -58,27 +59,39 @@ const StatusDrawer: React.FC<StatusDrawerProps> = ({ onClose }) => {
     { label: "Uptime", value: systemStatus.uptime },
   ];
 
+  // Determine the appropriate component and styling based on permanent mode
+  const Component = permanent ? 'div' : motion.div;
+  const motionProps = permanent ? {} : {
+    initial: { x: "100%" },
+    animate: { x: 0 },
+    exit: { x: "100%" },
+    transition: { type: "spring", damping: 25, stiffness: 250 }
+  };
+  const containerClassName = permanent 
+    ? "flex flex-col h-full" 
+    : "fixed inset-y-0 right-0 w-full sm:w-96 bg-white shadow-xl z-50 flex flex-col border-l border-secondary-200";
+
   return (
-    <motion.div
-      initial={{ x: "100%" }}
-      animate={{ x: 0 }}
-      exit={{ x: "100%" }}
-      transition={{ type: "spring", damping: 25, stiffness: 250 }}
-      className="fixed inset-y-0 right-0 w-full sm:w-96 bg-white shadow-xl z-50 flex flex-col border-l border-secondary-200"
+    // @ts-ignore - TypeScript doesn't like dynamic components with motion props
+    <Component
+      {...motionProps}
+      className={containerClassName}
     >
-      <div className="p-4 border-b border-secondary-200 flex items-center justify-between">
-        <h2 className="text-lg font-medium">System Status</h2>
-        <button 
-          onClick={onClose}
-          className="p-1.5 rounded-full hover:bg-secondary-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-secondary-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
+      <div className="p-3 border-b border-secondary-200 flex items-center justify-between">
+        <h2 className="text-sm font-medium">System Status</h2>
+        {!permanent && onClose && (
+          <button 
+            onClick={onClose}
+            className="p-1.5 rounded-full hover:bg-secondary-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-secondary-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        )}
       </div>
       
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className={`flex-1 overflow-y-auto ${permanent ? 'p-3' : 'p-4'}`}>
         {isLoading ? (
           <div className="animate-pulse space-y-4">
             <div className="h-4 bg-secondary-200 rounded w-1/2 mb-6"></div>
@@ -90,20 +103,20 @@ const StatusDrawer: React.FC<StatusDrawerProps> = ({ onClose }) => {
             ))}
           </div>
         ) : (
-          <div className="space-y-6">
+          <div className={`space-y-${permanent ? '3' : '6'}`}>
             <div>
-              <h3 className="text-secondary-900 font-medium mb-4">System Overview</h3>
-              <div className="grid grid-cols-2 gap-4">
+              <h3 className={`text-secondary-900 font-medium ${permanent ? 'text-sm mb-2' : 'mb-4'}`}>System Overview</h3>
+              <div className={`grid grid-cols-2 gap-${permanent ? '2' : '4'}`}>
                 {metrics.map((metric, index) => (
                   <motion.div
                     key={metric.label}
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: index * 0.1 }}
-                    className="bg-secondary-50 p-3 rounded-md"
+                    className={`bg-secondary-50 ${permanent ? 'p-2' : 'p-3'} rounded-md`}
                   >
                     <dt className="text-xs font-medium text-secondary-500">{metric.label}</dt>
-                    <dd className="mt-1 text-lg font-semibold text-secondary-900">{metric.value}</dd>
+                    <dd className={`mt-1 ${permanent ? 'text-sm' : 'text-lg'} font-semibold text-secondary-900`}>{metric.value}</dd>
                   </motion.div>
                 ))}
               </div>
@@ -111,7 +124,7 @@ const StatusDrawer: React.FC<StatusDrawerProps> = ({ onClose }) => {
             
             {/* CPU and Memory Usage Bars */}
             <div>
-              <h3 className="text-secondary-900 font-medium mb-3">Resource Usage</h3>
+              <h3 className={`text-secondary-900 font-medium ${permanent ? 'text-sm mb-2' : 'mb-3'}`}>Resource Usage</h3>
               
               <div className="space-y-4">
                 {/* CPU Usage */}
@@ -160,22 +173,24 @@ const StatusDrawer: React.FC<StatusDrawerProps> = ({ onClose }) => {
               </div>
             </div>
             
-            {/* System Actions */}
-            <div>
-              <h3 className="text-secondary-900 font-medium mb-3">System Actions</h3>
-              <div className="space-y-2">
-                <button className="w-full flex items-center justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500">
-                  Reindex All Documents
-                </button>
-                <button className="w-full flex items-center justify-center py-2 px-4 border border-secondary-300 rounded-md shadow-sm text-sm font-medium text-secondary-700 bg-white hover:bg-secondary-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500">
-                  Clear Vector Cache
-                </button>
+            {/* System Actions - only show in full drawer mode */}
+            {!permanent && (
+              <div>
+                <h3 className="text-secondary-900 font-medium mb-3">System Actions</h3>
+                <div className="space-y-2">
+                  <button className="w-full flex items-center justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500">
+                    Reindex All Documents
+                  </button>
+                  <button className="w-full flex items-center justify-center py-2 px-4 border border-secondary-300 rounded-md shadow-sm text-sm font-medium text-secondary-700 bg-white hover:bg-secondary-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500">
+                    Clear Vector Cache
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         )}
       </div>
-    </motion.div>
+    </Component>
   );
 };
 

@@ -4,12 +4,13 @@ import Sidebar from './components/Sidebar';
 import SearchView from './components/SearchView';
 import QuestionAnswerView from './components/QuestionAnswerView';
 import MetadataSearchView from './components/MetadataSearchView';
-import UploadArea from './components/UploadArea';
+import UploadView from './components/UploadView';
 import StatusDrawer from './components/StatusDrawer';
+import IndexedFilesPanel from './components/IndexedFilesPanel';
 import { AnimatePresence } from 'framer-motion';
 
 // Types for our view modes
-type ViewMode = 'search' | 'qa' | 'metadata';
+type ViewMode = 'search' | 'qa' | 'metadata' | 'upload';
 
 const App: React.FC = () => {
   const [viewMode, setViewMode] = useState<ViewMode>('search');
@@ -24,6 +25,8 @@ const App: React.FC = () => {
         return <QuestionAnswerView />;
       case 'metadata':
         return <MetadataSearchView />;
+      case 'upload':
+        return <UploadView />;
       default:
         return <SearchView />;
     }
@@ -31,32 +34,48 @@ const App: React.FC = () => {
 
   return (
     <div className="flex h-screen bg-secondary-50 overflow-hidden">
+      {/* Left sidebar navigation */}
       <Sidebar 
         currentView={viewMode} 
         onChangeView={setViewMode} 
         onToggleStatus={() => setIsStatusOpen(!isStatusOpen)}
       />
       
+      {/* Main content area */}
       <div className="flex-1 flex flex-col overflow-hidden">
         <Header />
         
-        <main className="flex-1 overflow-y-auto p-4 md:p-6">
-          <div className="max-w-5xl mx-auto">
-            {/* Upload area for file indexing */}
-            <UploadArea />
+        <main className="flex-1 overflow-hidden flex">
+          {/* Main view content */}
+          <div className="flex-1 overflow-y-auto p-4 md:p-6">
+            <div className="max-w-4xl mx-auto">
+              <AnimatePresence mode="wait">
+                {renderCurrentView()}
+              </AnimatePresence>
+            </div>
+          </div>
+          
+          {/* Right sidebar with files and status */}
+          <div className="hidden lg:flex lg:flex-col border-l border-secondary-200 bg-white w-80 overflow-hidden">
+            {/* Files panel */}
+            <div className="flex-1 overflow-hidden">
+              <IndexedFilesPanel />
+            </div>
             
-            {/* Current view component */}
-            <AnimatePresence mode="wait">
-              {renderCurrentView()}
-            </AnimatePresence>
+            {/* Status panel (permanently visible) */}
+            <div className="h-80 border-t border-secondary-200 overflow-y-auto">
+              <StatusDrawer permanent={true} />
+            </div>
           </div>
         </main>
       </div>
       
-      {/* Status drawer */}
+      {/* Mobile status drawer (only shown on smaller screens) */}
       <AnimatePresence>
         {isStatusOpen && (
-          <StatusDrawer onClose={() => setIsStatusOpen(false)} />
+          <div className="lg:hidden">
+            <StatusDrawer onClose={() => setIsStatusOpen(false)} />
+          </div>
         )}
       </AnimatePresence>
     </div>

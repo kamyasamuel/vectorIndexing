@@ -32,11 +32,39 @@ class OllamaClient:
             "model": model,
             "prompt": prompt,
             "temperature": temperature,
-            "max_tokens": max_tokens
+            "max_tokens": max_tokens,
+            "stream": False  # Explicitly set stream to False
         }
         
-        response = requests.post(url, json=payload, stream=False)
-        response.raise_for_status()
-        result = response.json()
-        
-        return result.get("response", "")
+        try:
+            response = requests.post(url, json=payload)
+            response.raise_for_status()
+            
+            # Get just the text content
+            content = response.text.strip()
+            
+            # If it's a single JSON object
+            try:
+                result = json.loads(content)
+                return result.get("response", "")
+            except json.JSONDecodeError:
+                # If it's multiple JSON objects (one per line)
+                full_response = ""
+                for line in content.splitlines():
+                    if not line.strip():
+                        continue
+                    try:
+                        line_json = json.loads(line)
+                        if "response" in line_json:
+                            full_response += line_json["response"]
+                    except json.JSONDecodeError:
+                        pass
+                        
+                if full_response:
+                    return full_response
+                else:
+                    return "Failed to parse response from language model."
+                
+        except Exception as e:
+            print(f"Error getting completion: {str(e)}")
+            return f"Error: {str(e)}"
