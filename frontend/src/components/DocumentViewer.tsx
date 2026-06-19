@@ -1,6 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import apiService, { DocumentViewResponse } from '../services/api';
 import FileIcon from './FileIcon';
+
+function resolveUrl(url: string): string {
+  return apiService.resolveUrl(url);
+}
 
 interface DocumentViewerProps {
   documentId: string;
@@ -19,7 +23,10 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<'view' | 'extracted' | 'info'>('view');
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [blobUrlLoading, setBlobUrlLoading] = useState(false);
 
+  // Fetch document metadata
   useEffect(() => {
     const fetchDocument = async () => {
       setIsLoading(true);
@@ -35,6 +42,65 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
     };
     fetchDocument();
   }, [documentId]);
+
+  const blobUrlRef = useRef<string | null>(null);
+
+  // Fetch binary content as blob for inline viewing (PDF, images, audio, video)
+  useEffect(() => {
+    if (!documentData) return;
+    const viewType = documentData.view_type;
+    if (viewType === 'pdf' || viewType === 'image' || viewType === 'audio' || viewType === 'video') {
+      // If we already have base64 content, no need to fetch blob
+      if (documentData.content_base64) return;
+
+      setBlobUrlLoading(true);
+      const downloadUrl = resolveUrl(
+        documentData.download_url || apiService.downloadDocument(documentId)
+      );
+
+      let cancelled = false;
+
+      fetch(downloadUrl)
+        .then(res => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.blob();
+        })
+        .then(blob => {
+          if (cancelled) return;
+          const url = URL.createObjectURL(blob);
+          // Revoke previous blob URL if any
+          if (blobUrlRef.current) {
+            URL.revokeObjectURL(blobUrlRef.current);
+          }
+          blobUrlRef.current = url;
+          setBlobUrl(url);
+        })
+        .catch(err => {
+          if (cancelled) return;
+          console.error('Failed to fetch binary content:', err);
+        })
+        .finally(() => {
+          if (!cancelled) setBlobUrlLoading(false);
+        });
+
+      return () => {
+        cancelled = true;
+        // Revoke blob URL on cleanup
+        if (blobUrlRef.current) {
+          URL.revokeObjectURL(blobUrlRef.current);
+          blobUrlRef.current = null;
+        }
+      };
+    }
+  }, [documentData, documentId]);
+
+  const getDisplayUrl = useCallback(() => {
+    if (!documentData) return null;
+    if (documentData.content_base64) {
+      return `data:${documentData.content_type || 'application/octet-stream'};base64,${documentData.content_base64}`;
+    }
+    return blobUrl;
+  }, [documentData, blobUrl]);
 
   const renderTextView = useCallback(() => {
     if (!documentData?.content) return null;
@@ -53,28 +119,23 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
     }
     
     if (isMarkdown) {
-      // Simple markdown-like rendering: split by double newlines for paragraphs
       const paragraphs = documentData.content.split(/\n\n+/);
       return (
         <div className="prose prose-sm max-w-none text-secondary-800">
           {paragraphs.map((para, i) => {
-            // Headings
             if (para.startsWith('### ')) return <h3 key={i} className="text-base font-semibold mt-3 mb-1">{para.slice(4)}</h3>;
             if (para.startsWith('## ')) return <h2 key={i} className="text-lg font-semibold mt-4 mb-2">{para.slice(3)}</h2>;
             if (para.startsWith('# ')) return <h1 key={i} className="text-xl font-bold mt-4 mb-2">{para.slice(2)}</h1>;
-            // Code blocks
             if (para.startsWith('```') && para.endsWith('```')) {
               const code = para.replace(/^```[\w]*\n?/, '').replace(/\n?```$/, '');
               return <pre key={i} className="text-sm font-mono bg-secondary-50 p-3 rounded-lg overflow-x-auto my-2 whitespace-pre-wrap">{code}</pre>;
             }
-            // Regular paragraph
             return <p key={i} className="mb-2 leading-relaxed">{para}</p>;
           })}
         </div>
       );
     }
     
-    // Plain text
     return (
       <div className="text-sm text-secondary-800 whitespace-pre-wrap font-sans leading-relaxed">
         {documentData.content}
@@ -83,30 +144,59 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
   }, [documentData]);
 
   const renderPDFView = useCallback(() => {
-    const downloadUrl = documentData?.download_url || apiService.downloadDocument(documentId);
+    const displayUrl = getDisplayUrl();
+    if (!displayUrl && blobUrlLoading) {
+      return (
+        <div className="flex flex-col items-center justify-center py-16">
+          <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-600 mb-4"></div>
+          <p className="text-sm text-secondary-500">Loading PDF...</p>
+        </div>
+      );
+    }
+    if (!displayUrl) {
+      return (
+        <div className="flex flex-col items-center justify-center py-12">
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-secondary-400 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+          </svg>
+          <p className="text-sm text-secondary-600 mb-2">PDF preview unavailable</p>
+          <p className="text-xs text-secondary-500 mb-3">You can download the file instead</p>
+          <a
+            href={resolveUrl(documentData?.download_url || apiService.downloadDocument(documentId))}
+            download
+            className="inline-flex items-center px-4 py-2 text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 rounded-md"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            Download PDF
+          </a>
+        </div>
+      );
+    }
+
     return (
       <div className="w-full h-full flex flex-col">
         <div className="flex-1 min-h-0">
           <iframe
-            src={downloadUrl}
+            src={displayUrl}
             className="w-full h-full rounded-lg border border-secondary-200"
             title={filename}
             style={{ minHeight: '60vh' }}
           />
         </div>
-        <div className="mt-2 text-xs text-secondary-500 text-center">
+        <div className="mt-2 text-xs text-secondary-500 text-center flex items-center justify-center gap-3">
           <a
-            href={downloadUrl}
-            download
+            href={displayUrl}
             className="text-primary-600 hover:text-primary-500 font-medium underline"
             target="_blank"
             rel="noopener noreferrer"
           >
             Open in new tab
           </a>
-          {' · '}
+          <span className="text-secondary-300">·</span>
           <a
-            href={downloadUrl}
+            href={resolveUrl(documentData?.download_url || apiService.downloadDocument(documentId))}
             download
             className="text-primary-600 hover:text-primary-500 font-medium underline"
           >
@@ -115,24 +205,47 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
         </div>
       </div>
     );
-  }, [documentData, documentId, filename]);
+  }, [getDisplayUrl, blobUrlLoading, documentData, documentId, filename]);
 
   const renderImageView = useCallback(() => {
-    const imageUrl = documentData?.content_base64
-      ? `data:${documentData.content_type || 'image/png'};base64,${documentData.content_base64}`
-      : documentData?.download_url || apiService.downloadDocument(documentId);
+    const displayUrl = getDisplayUrl();
+    const downloadUrl = resolveUrl(documentData?.download_url || apiService.downloadDocument(documentId));
 
     const imgInfo = documentData?.image_info;
     
+    if (!displayUrl && !blobUrlLoading) {
+      return (
+        <div className="flex flex-col items-center py-12">
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-secondary-400 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+          </svg>
+          <p className="text-sm text-secondary-600 mb-3">Image preview unavailable</p>
+          <a
+            href={downloadUrl}
+            download
+            className="inline-flex items-center px-4 py-2 text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 rounded-md"
+          >
+            Download image
+          </a>
+        </div>
+      );
+    }
+
     return (
       <div className="flex flex-col items-center">
         <div className="max-w-full overflow-auto rounded-lg border border-secondary-200 bg-secondary-50 p-2">
-          <img
-            src={imageUrl}
-            alt={filename}
-            className="max-w-full h-auto object-contain"
-            style={{ maxHeight: '70vh' }}
-          />
+          {displayUrl ? (
+            <img
+              src={displayUrl}
+              alt={filename}
+              className="max-w-full h-auto object-contain"
+              style={{ maxHeight: '70vh' }}
+            />
+          ) : (
+            <div className="flex items-center justify-center h-64 text-secondary-400">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
+            </div>
+          )}
         </div>
         {imgInfo && (
           <div className="mt-3 flex gap-4 text-xs text-secondary-600">
@@ -142,7 +255,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
         )}
         <div className="mt-2 text-xs text-secondary-500">
           <a
-            href={documentData?.download_url || apiService.downloadDocument(documentId)}
+            href={downloadUrl}
             download
             className="text-primary-600 hover:text-primary-500 font-medium underline"
           >
@@ -151,12 +264,11 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
         </div>
       </div>
     );
-  }, [documentData, filename, documentId]);
+  }, [getDisplayUrl, blobUrlLoading, documentData, filename, documentId]);
 
   const renderAudioView = useCallback(() => {
-    const audioUrl = documentData?.content_base64
-      ? `data:${documentData.content_type || 'audio/mpeg'};base64,${documentData.content_base64}`
-      : documentData?.download_url || apiService.downloadDocument(documentId);
+    const displayUrl = getDisplayUrl();
+    const downloadUrl = resolveUrl(documentData?.download_url || apiService.downloadDocument(documentId));
 
     return (
       <div className="flex flex-col items-center py-8">
@@ -167,17 +279,20 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
             </svg>
           </div>
           <p className="text-sm font-medium text-secondary-700 text-center mb-4">{filename}</p>
-          <audio
-            controls
-            className="w-full"
-            src={audioUrl}
-          >
-            Your browser does not support the audio element.
-          </audio>
+          {displayUrl ? (
+            <audio controls className="w-full" src={displayUrl}>
+              Your browser does not support the audio element.
+            </audio>
+          ) : (
+            <div className="text-center text-xs text-secondary-500">
+              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600 mx-auto mb-2"></div>
+              Loading audio...
+            </div>
+          )}
         </div>
         <div className="mt-2 text-xs text-secondary-500">
           <a
-            href={documentData?.download_url || apiService.downloadDocument(documentId)}
+            href={downloadUrl}
             download
             className="text-primary-600 hover:text-primary-500 font-medium underline"
           >
@@ -186,29 +301,34 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
         </div>
       </div>
     );
-  }, [documentData, filename, documentId]);
+  }, [getDisplayUrl, documentData, filename, documentId]);
 
   const renderVideoView = useCallback(() => {
-    const videoUrl = documentData?.content_base64
-      ? `data:${documentData.content_type || 'video/mp4'};base64,${documentData.content_base64}`
-      : documentData?.download_url || apiService.downloadDocument(documentId);
+    const displayUrl = getDisplayUrl();
+    const downloadUrl = resolveUrl(documentData?.download_url || apiService.downloadDocument(documentId));
 
     return (
       <div className="flex flex-col items-center py-4">
         <div className="w-full max-w-2xl bg-secondary-50 rounded-lg p-4 border border-secondary-200">
           <p className="text-sm font-medium text-secondary-700 mb-3">{filename}</p>
-          <video
-            controls
-            className="w-full rounded-lg"
-            style={{ maxHeight: '60vh' }}
-            src={videoUrl}
-          >
-            Your browser does not support the video element.
-          </video>
+          {displayUrl ? (
+            <video
+              controls
+              className="w-full rounded-lg"
+              style={{ maxHeight: '60vh' }}
+              src={displayUrl}
+            >
+              Your browser does not support the video element.
+            </video>
+          ) : (
+            <div className="flex items-center justify-center h-48 text-secondary-400">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600"></div>
+            </div>
+          )}
         </div>
         <div className="mt-2 text-xs text-secondary-500">
           <a
-            href={documentData?.download_url || apiService.downloadDocument(documentId)}
+            href={downloadUrl}
             download
             className="text-primary-600 hover:text-primary-500 font-medium underline"
           >
@@ -217,10 +337,10 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
         </div>
       </div>
     );
-  }, [documentData, filename, documentId]);
+  }, [getDisplayUrl, documentData, filename, documentId]);
 
   const renderBinaryView = useCallback(() => {
-    const downloadUrl = documentData?.download_url || apiService.downloadDocument(documentId);
+    const downloadUrl = resolveUrl(documentData?.download_url || apiService.downloadDocument(documentId));
     return (
       <div className="flex flex-col items-center py-12">
         <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 text-secondary-400 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -245,6 +365,46 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
       </div>
     );
   }, [documentData, documentId]);
+
+  const renderTextExtractedView = useCallback(() => {
+    if (!documentData?.extracted_text) {
+      return (
+        <div className="text-sm text-secondary-500 text-center py-8">
+          No extracted text available for this document.
+        </div>
+      );
+    }
+    return (
+      <div className="text-sm text-secondary-800 whitespace-pre-wrap font-sans leading-relaxed p-4">
+        {documentData.extracted_text}
+      </div>
+    );
+  }, [documentData]);
+
+  const renderFileInfoView = useCallback(() => {
+    if (!documentData) return null;
+    return (
+      <div className="bg-secondary-50 rounded-lg p-3 border border-secondary-200">
+        <h4 className="text-xs font-semibold text-secondary-700 uppercase mb-2">File Information</h4>
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+          <span className="text-secondary-500">Filename:</span>
+          <span className="text-secondary-800 font-medium truncate">{documentData.filename}</span>
+          <span className="text-secondary-500">Type:</span>
+          <span className="text-secondary-800 font-medium uppercase">{documentData.file_type}</span>
+          <span className="text-secondary-500">Size:</span>
+          <span className="text-secondary-800 font-medium">{formatFileSize(documentData.file_size)}</span>
+          <span className="text-secondary-500">Content Type:</span>
+          <span className="text-secondary-800 font-medium truncate">{documentData.content_type}</span>
+          {documentData.image_info && (
+            <>
+              <span className="text-secondary-500">Dimensions:</span>
+              <span className="text-secondary-800 font-medium">{documentData.image_info.width} × {documentData.image_info.height}px</span>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }, [documentData]);
 
   const renderContent = () => {
     if (isLoading) {
@@ -278,11 +438,12 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
 
     const viewType = documentData.view_type;
     const hasExtractedText = !!documentData.extracted_text;
+    const showTabs = hasExtractedText;
 
     return (
       <div className="flex flex-col h-full">
-        {/* Tabs for PDF with extracted text */}
-        {(viewType === 'pdf' && hasExtractedText) && (
+        {/* Tabs */}
+        {showTabs && (
           <div className="flex gap-1 mb-3 border-b border-secondary-200">
             <button
               onClick={() => setTab('view')}
@@ -319,53 +480,18 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
 
         {/* Content based on active tab */}
         <div className="flex-1 overflow-y-auto">
-          {tab === 'info' || (viewType !== 'pdf' && viewType !== 'image') ? (
-            <div className="space-y-3">
-              {/* File info card for all types */}
-              {tab === 'info' && (
-                <div className="bg-secondary-50 rounded-lg p-3 border border-secondary-200">
-                  <h4 className="text-xs font-semibold text-secondary-700 uppercase mb-2">File Information</h4>
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
-                    <span className="text-secondary-500">Filename:</span>
-                    <span className="text-secondary-800 font-medium truncate">{documentData.filename}</span>
-                    <span className="text-secondary-500">Type:</span>
-                    <span className="text-secondary-800 font-medium uppercase">{documentData.file_type}</span>
-                    <span className="text-secondary-500">Size:</span>
-                    <span className="text-secondary-800 font-medium">{formatFileSize(documentData.file_size)}</span>
-                    <span className="text-secondary-500">Content Type:</span>
-                    <span className="text-secondary-800 font-medium truncate">{documentData.content_type}</span>
-                    {documentData.image_info && (
-                      <>
-                        <span className="text-secondary-500">Dimensions:</span>
-                        <span className="text-secondary-800 font-medium">{documentData.image_info.width} × {documentData.image_info.height}px</span>
-                      </>
-                    )}
-                  </div>
-                </div>
-              )}
+          {tab === 'info' && renderFileInfoView()}
 
-              {/* Main content */}
-              {(viewType === 'text' || tab === 'extracted') && (
-                <div className="bg-white rounded-lg border border-secondary-200">
-                  {(viewType === 'text' && tab !== 'extracted') ? renderTextView() : null}
-                  {tab === 'extracted' && documentData.extracted_text && (
-                    <div className="text-sm text-secondary-800 whitespace-pre-wrap font-sans leading-relaxed p-4">
-                      {documentData.extracted_text}
-                    </div>
-                  )}
-                </div>
-              )}
-              
-              {viewType === 'pdf' && tab === 'view' && renderPDFView()}
+          {tab === 'extracted' && renderTextExtractedView()}
+
+          {tab === 'view' && (
+            <>
+              {viewType === 'text' && renderTextView()}
+              {viewType === 'pdf' && renderPDFView()}
               {viewType === 'image' && renderImageView()}
               {viewType === 'audio' && renderAudioView()}
               {viewType === 'video' && renderVideoView()}
               {viewType === 'binary' && renderBinaryView()}
-            </div>
-          ) : (
-            <>
-              {viewType === 'pdf' && renderPDFView()}
-              {viewType === 'image' && renderImageView()}
             </>
           )}
         </div>
@@ -391,7 +517,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
             {/* Download button */}
             {documentData?.download_url && (
               <a
-                href={documentData.download_url}
+                href={resolveUrl(documentData.download_url)}
                 download
                 className="p-2 rounded-md hover:bg-secondary-200 text-secondary-500 hover:text-secondary-700 transition-colors"
                 title="Download file"

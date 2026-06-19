@@ -1,12 +1,16 @@
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Query
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Query, Depends
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.core.searcher import DocumentSearcher
 from app.core.indexer import DocumentIndexer
+from app.search.hybrid_searcher import HybridSearcher
 from app.ai.ollama_client import OllamaClient
 from app.ai.agentic_qa import AgenticQATuner
+from app.evaluation import RAGEvaluator
+from app.collections import CollectionManager
+from app.auth.auth_handler import AuthHandler, get_optional_user
 import os
 import shutil
 import uuid
@@ -21,6 +25,9 @@ router = APIRouter()
 searcher = DocumentSearcher()
 indexer = DocumentIndexer()
 agentic_qa = AgenticQATuner()
+rag_evaluator = RAGEvaluator()
+collection_manager = CollectionManager()
+auth_handler = AuthHandler()
 
 # Track server start time for uptime calculation
 _server_start_time = time.time()
@@ -225,6 +232,16 @@ async def get_system_status():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Hybrid searcher instance
+hybrid_searcher = HybridSearcher()
+
+class HybridSearchQuery(BaseModel):
+    query: str
+    top_k: int = 5
+    mode: str = "hybrid"  # "hybrid", "semantic", "keyword"
+    filters: Optional[Dict[str, Any]] = None
+
+
 @router.post("/search", response_model=SearchResponse)
 async def search(query: SearchQuery):
     """Search for documents similar to the query."""
@@ -233,6 +250,32 @@ async def search(query: SearchQuery):
             results = searcher.filter_by_metadata(query.query, query.filters, query.top_k)
         else:
             results = searcher.similarity_search(query.query, query.top_k)
+        
+        # Enrich results with download URLs and formatted fields
+        enriched = [_enrich_search_result(r) for r in results]
+        
+        return {"results": enriched}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/hybrid-search", response_model=SearchResponse)
+async def hybrid_search(query: HybridSearchQuery):
+    """Search using hybrid (BM25 + vector), semantic-only, or keyword-only mode.
+    
+    Args:
+        query: The search text.
+        top_k: Number of results.
+        mode: "hybrid" (default), "semantic" (FAISS only), "keyword" (BM25 only).
+        filters: Optional metadata filters.
+    """
+    try:
+        results = hybrid_searcher.search(
+            query=query.query,
+            top_k=query.top_k,
+            mode=query.mode,
+            filters=query.filters,
+        )
         
         # Enrich results with download URLs and formatted fields
         enriched = [_enrich_search_result(r) for r in results]
@@ -329,8 +372,13 @@ async def index_file(file: UploadFile = File(...)):
 
 
 @router.get("/documents/{document_id}/download")
-async def download_document(document_id: str):
-    """Download the original file for an indexed document."""
+async def download_document(document_id: str, inline: bool = Query(False)):
+    """Download the original file for an indexed document.
+    
+    Query params:
+      - inline: If true, serves with Content-Disposition: inline for browser preview.
+                If false, serves as downloadable attachment.
+    """
     try:
         doc = indexer.metadata_store.get_document(document_id)
         if not doc:
@@ -342,10 +390,23 @@ async def download_document(document_id: str):
         
         filename = doc.get("title") or os.path.basename(source) or "download"
         
+        # Use proper MIME type based on file extension
+        from app.api.controllers_view import _get_mime_type
+        media_type = _get_mime_type(source)
+        
+        headers = {}
+        if inline:
+            # Content-Disposition: inline tells the browser to display the file
+            headers["Content-Disposition"] = f'inline; filename="{filename}"'
+        else:
+            # Let FastAPI's FileResponse handle attachment disposition via filename parameter
+            pass
+        
         return FileResponse(
             path=source,
-            filename=filename,
-            media_type="application/octet-stream"
+            filename=None if inline else filename,
+            media_type=media_type,
+            headers=headers if headers else None,
         )
     except HTTPException:
         raise
@@ -547,4 +608,491 @@ async def add_document_to_category(request: AddDocumentToCategoryRequest):
         return {"status": "success", "message": f"Document moved to category successfully"}
     except Exception as e:
         print(f"Error moving document: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ═══════════════════════════════════════════════════════════════════
+# RAG Evaluation Endpoints
+# ═══════════════════════════════════════════════════════════════════
+
+class EvaluationRequest(BaseModel):
+    query: str
+    answer: str
+    contexts: List[Dict[str, Any]]
+    relevant_chunk_ids: Optional[List[str]] = None
+
+
+@router.post("/evaluate", response_model=Dict[str, Any])
+async def evaluate_rag(request: EvaluationRequest):
+    """Evaluate a RAG pipeline output on faithfulness, relevance, precision, and recall.
+    
+    Args:
+        query: The original user query.
+        answer: The generated answer.
+        contexts: List of context chunks used (each with 'content' key).
+        relevant_chunk_ids: Optional ground truth relevant chunk IDs for exact recall.
+        
+    Returns:
+        Dict with overall_score, per-metric breakdowns, and timing info.
+    """
+    try:
+        result = rag_evaluator.evaluate(
+            query=request.query,
+            answer=request.answer,
+            contexts=request.contexts,
+            relevant_chunk_ids=request.relevant_chunk_ids,
+        )
+        return result
+    except Exception as e:
+        print(f"Evaluation error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class BatchEvalRequest(BaseModel):
+    examples: List[Dict[str, Any]]
+
+
+@router.post("/evaluate/batch", response_model=Dict[str, Any])
+async def evaluate_batch(request: BatchEvalRequest):
+    """Evaluate multiple RAG examples and return per-example + summary statistics."""
+    try:
+        results = rag_evaluator.evaluate_batch(request.examples)
+        summary = rag_evaluator.summarize_batch(results)
+        return {
+            "results": results,
+            "summary": summary,
+            "count": len(results),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Collection Management Endpoints
+# ═══════════════════════════════════════════════════════════════════
+
+class CreateCollectionRequest(BaseModel):
+    name: str
+    description: str = ""
+
+
+class UpdateCollectionRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
+class AddToCollectionRequest(BaseModel):
+    collection_id: str
+    document_ids: List[str]
+
+
+class ReorderCollectionRequest(BaseModel):
+    collection_id: str
+    document_ids: List[str]
+
+
+class ShareCollectionRequest(BaseModel):
+    collection_id: str
+    shared_with_user_id: str
+    permission: str = "read"
+
+
+class RevokeShareRequest(BaseModel):
+    collection_id: str
+    shared_with_user_id: str
+
+
+@router.post("/collections", response_model=Dict[str, Any])
+async def create_collection(
+    request: CreateCollectionRequest,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+):
+    """Create a new document collection.
+    
+    Requires authentication. Uses user_id from JWT token.
+    """
+    try:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        
+        collection = collection_manager.create_collection(
+            name=request.name,
+            owner_id=current_user["id"],
+            description=request.description,
+        )
+        return {"status": "success", "collection": collection.to_dict()}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/collections", response_model=List[Dict[str, Any]])
+async def list_collections(
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+):
+    """List all collections accessible to the current user."""
+    try:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        
+        collections = collection_manager.list_collections(user_id=current_user["id"])
+        return [c.to_dict() for c in collections]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/collections/{collection_id}", response_model=Dict[str, Any])
+async def get_collection(
+    collection_id: str,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+):
+    """Get a collection by ID."""
+    try:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        
+        collection = collection_manager.get_collection(collection_id, current_user["id"])
+        if not collection:
+            raise HTTPException(status_code=404, detail="Collection not found")
+        return collection.to_dict()
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/collections/{collection_id}")
+async def update_collection(
+    collection_id: str,
+    request: UpdateCollectionRequest,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+):
+    """Update a collection's name and/or description."""
+    try:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        
+        collection = collection_manager.update_collection(
+            collection_id=collection_id,
+            user_id=current_user["id"],
+            name=request.name,
+            description=request.description,
+        )
+        return {"status": "success", "collection": collection.to_dict()}
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/collections/{collection_id}")
+async def delete_collection(
+    collection_id: str,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+):
+    """Delete a collection (owner only)."""
+    try:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        
+        collection_manager.delete_collection(collection_id, current_user["id"])
+        return {"status": "success", "message": "Collection deleted"}
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/collections/documents/add")
+async def add_to_collection(
+    request: AddToCollectionRequest,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+):
+    """Add documents to a collection."""
+    try:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        
+        collection = collection_manager.add_documents(
+            collection_id=request.collection_id,
+            user_id=current_user["id"],
+            document_ids=request.document_ids,
+        )
+        return {"status": "success", "collection": collection.to_dict()}
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/collections/documents/remove")
+async def remove_from_collection(
+    request: AddToCollectionRequest,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+):
+    """Remove documents from a collection."""
+    try:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        
+        collection = collection_manager.remove_documents(
+            collection_id=request.collection_id,
+            user_id=current_user["id"],
+            document_ids=request.document_ids,
+        )
+        return {"status": "success", "collection": collection.to_dict()}
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/collections/documents/reorder")
+async def reorder_collection(
+    request: ReorderCollectionRequest,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+):
+    """Reorder documents in a collection (drag-drop support)."""
+    try:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        
+        collection = collection_manager.reorder_documents(
+            collection_id=request.collection_id,
+            user_id=current_user["id"],
+            document_ids=request.document_ids,
+        )
+        return {"status": "success", "collection": collection.to_dict()}
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/collections/share")
+async def share_collection(
+    request: ShareCollectionRequest,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+):
+    """Share a collection with another user."""
+    try:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        
+        share = collection_manager.share_collection(
+            collection_id=request.collection_id,
+            owner_id=current_user["id"],
+            shared_with_user_id=request.shared_with_user_id,
+            permission=request.permission,
+        )
+        return {"status": "success", "share": share.to_dict()}
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/collections/revoke")
+async def revoke_share(
+    request: RevokeShareRequest,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+):
+    """Revoke a share grant on a collection."""
+    try:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        
+        collection_manager.revoke_share(
+            collection_id=request.collection_id,
+            owner_id=current_user["id"],
+            shared_with_user_id=request.shared_with_user_id,
+        )
+        return {"status": "success", "message": "Share revoked"}
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/collections/{collection_id}/shares")
+async def get_collection_shares(
+    collection_id: str,
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+):
+    """Get all shares for a collection (owner only)."""
+    try:
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        
+        shares = collection_manager.get_shares(collection_id, current_user["id"])
+        return {"shares": [s.to_dict() for s in shares]}
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Audio Transcription Endpoint
+# ═══════════════════════════════════════════════════════════════════
+
+@router.post("/transcribe")
+async def transcribe_audio(
+    file: UploadFile = File(...),
+    language: Optional[str] = Form(None),
+):
+    """Transcribe an audio file using Whisper and return the text.
+    
+    The transcribed text can then be used for indexing or other purposes.
+    Supports mp3, wav, ogg, flac, m4a, and other common formats.
+    """
+    try:
+        # Save uploaded file temporarily
+        doc_uuid = str(uuid.uuid4())
+        dest_dir = os.path.join(UPLOAD_DIR, "transcriptions", doc_uuid)
+        os.makedirs(dest_dir, exist_ok=True)
+        
+        original_filename = file.filename or "audio_file"
+        dest_path = os.path.join(dest_dir, original_filename)
+        
+        content = await file.read()
+        with open(dest_path, "wb") as f:
+            f.write(content)
+        
+        # Transcribe
+        from app.loaders.audio_loader import AudioLoader
+        result = AudioLoader.load_with_timestamps(dest_path, language=language)
+        
+        return {
+            "status": "success",
+            "text": result["document"].content,
+            "segments": result["segments"],
+            "duration_seconds": result["duration"],
+            "detected_language": result["language"],
+            "word_count": len(result["document"].content.split()),
+            "metadata": result["document"].metadata,
+        }
+        
+    except Exception as e:
+        print(f"Transcription error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # Clean up temp file
+        if 'dest_path' in dir() and os.path.exists(dest_path):
+            os.remove(dest_path)
+        if 'dest_dir' in dir() and os.path.exists(dest_dir):
+            try:
+                os.rmdir(dest_dir)
+            except OSError:
+                pass
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Model & Provider Information
+# ═══════════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════════
+# Authentication Endpoints
+# ═══════════════════════════════════════════════════════════════════
+
+from app.auth.auth_handler import UserCreate, UserLogin
+
+
+@router.post("/auth/register")
+async def register(user_data: UserCreate):
+    """Register a new user."""
+    try:
+        result = auth_handler.register_user(user_data)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/auth/login")
+async def login(login_data: UserLogin):
+    """Login and receive JWT token."""
+    try:
+        result = auth_handler.login_user(login_data)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/auth/me")
+async def get_me(
+    current_user: Optional[Dict[str, Any]] = Depends(get_optional_user),
+):
+    """Get current user info from JWT token."""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return {
+        "id": current_user["id"],
+        "username": current_user["username"],
+        "email": current_user["email"],
+        "full_name": current_user["full_name"],
+        "role": current_user["role"],
+        "is_active": current_user["is_active"],
+    }
+
+
+@router.get("/providers")
+async def list_providers():
+    """List configured LLM and embedding providers with their status."""
+    try:
+        from app.ai.providers import list_providers as get_providers
+        return get_providers()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/config")
+async def get_app_config():
+    """Return the current app configuration (non-sensitive settings)."""
+    try:
+        from config import (
+            OLLAMA_BASE_URL,
+            EMBEDDING_MODEL,
+            COMPLETION_MODEL,
+            VECTOR_DB_PATH,
+            METADATA_DB_PATH,
+            UPLOAD_DIR,
+            CHUNK_SIZE,
+            CHUNK_OVERLAP,
+        )
+
+        # Compute data directory size
+        base_path = os.path.dirname(VECTOR_DB_PATH)
+        total_size = 0
+        if os.path.exists(base_path):
+            for dirpath, dirnames, filenames in os.walk(base_path):
+                for f in filenames:
+                    fp = os.path.join(dirpath, f)
+                    try:
+                        total_size += os.path.getsize(fp)
+                    except OSError:
+                        pass
+
+        return {
+            "ollama_base_url": OLLAMA_BASE_URL,
+            "embedding_model": EMBEDDING_MODEL,
+            "completion_model": COMPLETION_MODEL,
+            "vector_db_path": VECTOR_DB_PATH,
+            "metadata_db_path": METADATA_DB_PATH,
+            "upload_dir": UPLOAD_DIR,
+            "chunk_size": CHUNK_SIZE,
+            "chunk_overlap": CHUNK_OVERLAP,
+            "data_size_bytes": total_size,
+        }
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

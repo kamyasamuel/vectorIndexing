@@ -39,7 +39,9 @@ const SearchResultCard: React.FC<SearchResultCardProps> = ({ result, index, quer
   const fileSize = result.file_size || (result.metadata?.file_size as number);
   const chunkIndex = result.chunk_index ?? (result.metadata?.chunk_index as number);
   const similarity = result.score ?? result.similarity ?? 0;
-  const downloadUrl = result.download_url || (result.document_id ? apiService.downloadDocument(result.document_id) : null);
+  const downloadUrl = result.download_url 
+    ? apiService.resolveUrl(result.download_url) 
+    : (result.document_id ? apiService.resolveUrl(apiService.downloadDocument(result.document_id)) : null);
   const source = result.source || (result.metadata?.source as string) || '';
 
   // Highlight query terms in text

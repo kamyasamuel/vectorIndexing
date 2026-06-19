@@ -10,6 +10,9 @@ import { HistoryEntry } from '../types/history';
 // Quick file type filters
 const FILE_TYPE_OPTIONS = ['pdf', 'txt', 'docx', 'md', 'mp3'];
 
+// Search mode options
+type SearchMode = 'hybrid' | 'semantic' | 'keyword';
+
 const SearchView: React.FC = () => {
   const { addEntry, clearHistory, getEntries } = useHistory();
   const [query, setQuery] = useState('');
@@ -19,6 +22,7 @@ const SearchView: React.FC = () => {
   const [allResults, setAllResults] = useState<SearchResult[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [fileTypeFilter, setFileTypeFilter] = useState<string>('');
+  const [searchMode, setSearchMode] = useState<SearchMode>('hybrid');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [searchTime, setSearchTime] = useState<number | null>(null);
   const [viewerDoc, setViewerDoc] = useState<{ id: string; filename: string; fileType: string } | null>(null);
@@ -260,8 +264,25 @@ const SearchView: React.FC = () => {
             </div>
           </div>
           
-          {/* Inline file type filter chips */}
+          {/* Search mode and file type filter chips */}
           <div className="mt-3 flex flex-wrap items-center gap-1.5">
+            {/* Search mode selector */}
+            <span className="text-[10px] font-medium text-secondary-400 uppercase tracking-wider mr-1">Mode:</span>
+            {(['hybrid', 'semantic', 'keyword'] as SearchMode[]).map(mode => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setSearchMode(mode)}
+                className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                  searchMode === mode
+                    ? 'bg-secondary-200 text-secondary-800'
+                    : 'bg-secondary-100 text-secondary-600 hover:bg-secondary-200'
+                }`}
+              >
+                {mode === 'hybrid' ? 'Hybrid' : mode === 'semantic' ? 'Semantic' : 'Keyword'}
+              </button>
+            ))}
+            <span className="mx-2 text-secondary-300">|</span>
             <span className="text-[10px] font-medium text-secondary-400 uppercase tracking-wider mr-1">Type:</span>
             <button
               type="button"

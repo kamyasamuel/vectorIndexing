@@ -9,6 +9,18 @@ const api = axios.create({
   withCredentials: false, // Important for CORS
 });
 
+// Add auth token to all requests if available
+api.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('auth_token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
+
 // System status type
 export interface SystemStatus {
   totalDocuments: number;
@@ -108,6 +120,60 @@ export interface DocumentViewResponse {
   error?: string;
 }
 
+// ─── RAG Evaluation Types ───────────────────────────────────────
+
+export interface EvaluationRequest {
+  query: string;
+  answer: string;
+  contexts: Record<string, any>[];
+  relevant_chunk_ids?: string[];
+}
+
+export interface EvaluationResult {
+  overall_score: number;
+  metrics: {
+    faithfulness: { score: number; total_claims: number; supported_claims: number; unsupported_claims: number; details: any[] };
+    relevance: { score: number; responsiveness: number; completeness: number; focus: number; strengths: string[]; weaknesses: string[] };
+    context_precision: { precision: number; relevant_count: number; total_count: number; judgments: any[] };
+    context_recall: { recall: number; retrieved_relevant: number; total_relevant: number | string; method: string };
+  };
+  summary: Record<string, string>;
+  total_time: number;
+}
+
+// ─── Collection Types ──────────────────────────────────────────
+
+export interface Collection {
+  id: string;
+  name: string;
+  description: string;
+  owner_id: string;
+  document_count: number;
+  document_ids: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CollectionShare {
+  collection_id: string;
+  shared_with_user_id: string;
+  permission: string;
+  shared_by_user_id: string;
+  shared_at: string;
+}
+
+// ─── Transcription Types ────────────────────────────────────────
+
+export interface TranscriptionResult {
+  status: string;
+  text: string;
+  segments: { start: number; end: number; text: string }[];
+  duration_seconds: number;
+  detected_language: string;
+  word_count: number;
+  metadata: Record<string, any>;
+}
+
 // API functions
 export const apiService = {
   // Search for documents
@@ -205,14 +271,186 @@ export const apiService = {
     return response.data;
   },
   
+  // Resolve a possibly-relative download URL to an absolute URL
+  resolveUrl: (url: string): string => {
+    if (!url) return url;
+    if (url.startsWith('http://') || url.startsWith('https://')) return url;
+    const base = api.defaults.baseURL || 'http://localhost:8000/api';
+    // If url starts with /api/, strip that since base already has /api
+    if (url.startsWith('/api/')) {
+      return `${base}${url.replace('/api', '')}`;
+    }
+    return `${base}${url.startsWith('/') ? '' : '/'}${url}`;
+  },
+
   // Download a document
-  downloadDocument: (documentId: string): string => {
-    return `${api.defaults.baseURL || 'http://localhost:8000/api'}/documents/${documentId}/download`;
+  downloadDocument: (documentId: string, inline: boolean = false): string => {
+    const base = api.defaults.baseURL || 'http://localhost:8000/api';
+    return `${base}/documents/${documentId}/download${inline ? '?inline=true' : ''}`;
   },
   
   // Get system status
   getSystemStatus: async (): Promise<SystemStatus> => {
     const response = await api.get('/status');
+    return response.data;
+  },
+
+  // ─── Hybrid Search ────────────────────────────────────────────
+  hybridSearch: async (
+    query: string,
+    topK: number = 5,
+    mode: 'hybrid' | 'semantic' | 'keyword' = 'hybrid',
+    filters?: Record<string, any>,
+  ): Promise<SearchResponse> => {
+    const response = await api.post('/hybrid-search', {
+      query,
+      top_k: topK,
+      mode,
+      filters,
+    });
+    return response.data;
+  },
+
+  // ─── RAG Evaluation ───────────────────────────────────────────
+  evaluateRag: async (request: EvaluationRequest): Promise<EvaluationResult> => {
+    const response = await api.post('/evaluate', request);
+    return response.data;
+  },
+
+  evaluateBatch: async (examples: EvaluationRequest[]): Promise<{ results: EvaluationResult[]; summary: Record<string, number>; count: number }> => {
+    const response = await api.post('/evaluate/batch', { examples });
+    return response.data;
+  },
+
+  // ─── Collections ──────────────────────────────────────────────
+  createCollection: async (name: string, description: string = ''): Promise<{ status: string; collection: Collection }> => {
+    const response = await api.post('/collections', { name, description });
+    return response.data;
+  },
+
+  getCollections: async (): Promise<Collection[]> => {
+    const response = await api.get('/collections');
+    return response.data;
+  },
+
+  getCollection: async (collectionId: string): Promise<Collection> => {
+    const response = await api.get(`/collections/${collectionId}`);
+    return response.data;
+  },
+
+  updateCollection: async (collectionId: string, name?: string, description?: string): Promise<{ status: string; collection: Collection }> => {
+    const response = await api.put(`/collections/${collectionId}`, { name, description });
+    return response.data;
+  },
+
+  deleteCollection: async (collectionId: string): Promise<{ status: string; message: string }> => {
+    const response = await api.delete(`/collections/${collectionId}`);
+    return response.data;
+  },
+
+  addDocumentsToCollection: async (collectionId: string, documentIds: string[]): Promise<{ status: string; collection: Collection }> => {
+    const response = await api.post('/collections/documents/add', { collection_id: collectionId, document_ids: documentIds });
+    return response.data;
+  },
+
+  removeDocumentsFromCollection: async (collectionId: string, documentIds: string[]): Promise<{ status: string; collection: Collection }> => {
+    const response = await api.post('/collections/documents/remove', { collection_id: collectionId, document_ids: documentIds });
+    return response.data;
+  },
+
+  reorderCollection: async (collectionId: string, documentIds: string[]): Promise<{ status: string; collection: Collection }> => {
+    const response = await api.put('/collections/documents/reorder', { collection_id: collectionId, document_ids: documentIds });
+    return response.data;
+  },
+
+  shareCollection: async (collectionId: string, sharedWithUserId: string, permission: string = 'read'): Promise<{ status: string; share: CollectionShare }> => {
+    const response = await api.post('/collections/share', { collection_id: collectionId, shared_with_user_id: sharedWithUserId, permission });
+    return response.data;
+  },
+
+  revokeCollectionShare: async (collectionId: string, sharedWithUserId: string): Promise<{ status: string; message: string }> => {
+    const response = await api.post('/collections/revoke', { collection_id: collectionId, shared_with_user_id: sharedWithUserId });
+    return response.data;
+  },
+
+  getCollectionShares: async (collectionId: string): Promise<{ shares: CollectionShare[] }> => {
+    const response = await api.get(`/collections/${collectionId}/shares`);
+    return response.data;
+  },
+
+  // ─── Audio Transcription ─────────────────────────────────────
+  transcribeAudio: async (file: File, language?: string): Promise<TranscriptionResult> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (language) formData.append('language', language);
+
+    const response = await api.post('/transcribe', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  },
+
+  // ─── Auth ──────────────────────────────────────────────────────
+  login: async (username: string, password: string): Promise<any> => {
+    const response = await api.post('/auth/login', { username, password });
+    if (response.data.access_token) {
+      localStorage.setItem('auth_token', response.data.access_token);
+      localStorage.setItem('user', JSON.stringify(response.data.user));
+    }
+    return response.data;
+  },
+
+  register: async (username: string, email: string, password: string, fullName?: string): Promise<any> => {
+    const response = await api.post('/auth/register', {
+      username,
+      email,
+      password,
+      full_name: fullName || '',
+    });
+    if (response.data.access_token) {
+      localStorage.setItem('auth_token', response.data.access_token);
+      localStorage.setItem('user', JSON.stringify(response.data.user));
+    }
+    return response.data;
+  },
+
+  getMe: async (): Promise<any> => {
+    const token = localStorage.getItem('auth_token');
+    if (!token) throw new Error('Not authenticated');
+    const response = await api.get('/auth/me', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    return response.data;
+  },
+
+  logout: (): void => {
+    localStorage.removeItem('auth_token');
+    localStorage.removeItem('user');
+  },
+
+  isAuthenticated: (): boolean => {
+    return !!localStorage.getItem('auth_token');
+  },
+
+  // ─── Providers Info ───────────────────────────────────────────
+  getProviders: async (): Promise<Record<string, Record<string, string>>> => {
+    const response = await api.get('/providers');
+    return response.data;
+  },
+
+  // ─── App Config ───────────────────────────────────────────────
+  getConfig: async (): Promise<{
+    ollama_base_url: string;
+    embedding_model: string;
+    completion_model: string;
+    vector_db_path: string;
+    metadata_db_path: string;
+    upload_dir: string;
+    chunk_size: number;
+    chunk_overlap: number;
+    data_size_bytes: number;
+  }> => {
+    const response = await api.get('/config');
     return response.data;
   },
 };

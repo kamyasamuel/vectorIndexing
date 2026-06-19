@@ -1,0 +1,33 @@
+# Git
+.git/
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Data (persistent)
+data/
+uploads/
+
+# IDE
+.vscode/
+.idea/
+
+# Environment
+.env
+
+# Build artifacts
+frontend/node_modules/
+frontend/build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.dockerignore

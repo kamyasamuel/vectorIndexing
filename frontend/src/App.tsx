@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import SearchView from './components/SearchView';
@@ -6,19 +6,51 @@ import QuestionAnswerView from './components/QuestionAnswerView';
 import MetadataSearchView from './components/MetadataSearchView';
 import UploadView from './components/UploadView';
 import LibraryView from './components/LibraryView';
+import LoginPage from './components/LoginPage';
 import StatusDrawer from './components/StatusDrawer';
 import IndexedFilesPanel from './components/IndexedFilesPanel';
 import { HistoryProvider } from './hooks/useHistory';
 import { motion, AnimatePresence } from 'framer-motion';
+import apiService from './services/api';
 
 // Types for our view modes
 type ViewMode = 'search' | 'qa' | 'metadata' | 'upload' | 'library';
 
 const App: React.FC = () => {
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [authChecked, setAuthChecked] = useState<boolean>(false);
   const [viewMode, setViewMode] = useState<ViewMode>('search');
   const [isStatusOpen, setIsStatusOpen] = useState<boolean>(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
   const [isFilesPanelOpen, setIsFilesPanelOpen] = useState<boolean>(true);
+
+  // Check auth state on mount
+  useEffect(() => {
+    const checkAuth = async () => {
+      const hasToken = apiService.isAuthenticated();
+      if (hasToken) {
+        try {
+          await apiService.getMe();
+          setIsAuthenticated(true);
+        } catch {
+          // Token is invalid/expired, clear it
+          apiService.logout();
+          setIsAuthenticated(false);
+        }
+      }
+      setAuthChecked(true);
+    };
+    checkAuth();
+  }, []);
+
+  const handleLoginSuccess = () => {
+    setIsAuthenticated(true);
+  };
+
+  const handleLogout = () => {
+    apiService.logout();
+    setIsAuthenticated(false);
+  };
   
   // Render the current view based on mode
   const renderCurrentView = () => {
@@ -38,6 +70,23 @@ const App: React.FC = () => {
     }
   };
 
+  // Show loading screen while checking auth
+  if (!authChecked) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-secondary-50">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-600 mx-auto mb-4"></div>
+          <p className="text-sm text-secondary-500">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show login page if not authenticated
+  if (!isAuthenticated) {
+    return <LoginPage onLoginSuccess={handleLoginSuccess} />;
+  }
+
   return (
     <HistoryProvider>
     <div className="flex h-screen bg-secondary-50 overflow-hidden">
@@ -48,6 +97,8 @@ const App: React.FC = () => {
         onToggleStatus={() => setIsStatusOpen(!isStatusOpen)}
         collapsed={isSidebarCollapsed}
         onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+        onLogout={handleLogout}
+        isAuthenticated={isAuthenticated}
       />
       
       {/* Main content area */}
@@ -89,7 +140,7 @@ const App: React.FC = () => {
                     title="Collapse side panels"
                   >
                     <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5l-7 7 7 7m8-14l-7 7 7 7" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
                     </svg>
                   </button>
                 </div>
@@ -125,7 +176,7 @@ const App: React.FC = () => {
                   title="Show side panels"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5l-7 7 7 7m8-14l-7 7 7 7" />
                   </svg>
                 </button>
               </div>
@@ -134,12 +185,10 @@ const App: React.FC = () => {
         </main>
       </div>
       
-      {/* Mobile status drawer (only shown on smaller screens) */}
+      {/* Mobile status drawer (shown on all screens as overlay when status button clicked) */}
       <AnimatePresence>
         {isStatusOpen && (
-          <div className="lg:hidden">
-            <StatusDrawer onClose={() => setIsStatusOpen(false)} />
-          </div>
+          <StatusDrawer onClose={() => setIsStatusOpen(false)} />
         )}
       </AnimatePresence>
     </div>

@@ -29,7 +29,7 @@ This document tracks progress on implementing 10 new features identified during 
 - [x] `app/search/hybrid_searcher.py` — RRF merging of BM25 + FAISS results
 - [x] Integrate into API controller endpoints
 - [x] Add API endpoint for hybrid search
-- [ ] Add frontend toggle (semantic / hybrid / both) — frontend task
+- [x] Add frontend toggle (semantic / hybrid / keyword) — frontend task
 
 #### [x] 5. Advanced RAG
 - [x] `app/rag/__init__.py`
@@ -48,14 +48,51 @@ This document tracks progress on implementing 10 new features identified during 
 
 ---
 
-## Phase 3: Enterprise & UX Features (Planned)
+## Phase 3: Enterprise & UX Features ✅ Complete
 
 | # | Feature | Status | Details |
 |---|---------|--------|---------|
-| 7 | **RAG Evaluation Harness** | ░░░░░░ | Faithfulness, relevance, precision, recall metrics |
-| 8 | **Audio Transcription (Whisper)** | ░░░░░░ | OpenAI Whisper API integration |
-| 9 | **Docker Compose Deployment** | ░░░░░░ | Multi-service deployment with nginx |
-| 10 | **Library/Collection Management** | ░░░░░░ | Drag-drop, sharing, bulk operations |
+| 7 | **RAG Evaluation Harness** | ✅ Done | Faithfulness, relevance, precision, recall metrics |
+| 8 | **Audio Transcription (Whisper)** | ✅ Done | OpenAI Whisper API + local fallback |
+| 9 | **Docker Compose Deployment** | ✅ Done | Multi-service deployment with nginx |
+| 10 | **Library/Collection Management** | ✅ Done | CRUD, drag-drop, sharing, bulk operations |
+
+### Phase 3 Sub-tasks
+
+#### [x] 7. RAG Evaluation Harness
+- [x] `app/evaluation/__init__.py`
+- [x] `app/evaluation/faithfulness.py` — LLM-as-judge claim extraction & verification
+- [x] `app/evaluation/relevance.py` — Responsiveness, completeness, focus scoring
+- [x] `app/evaluation/precision_recall.py` — Context precision & recall (exact or estimated)
+- [x] `app/evaluation/evaluator.py` — Unified orchestrator + batch + summary stats
+- [x] API endpoints: `POST /evaluate`, `POST /evaluate/batch`
+- [x] Frontend types in `api.ts`
+
+#### [x] 8. Audio Transcription (Whisper)
+- [x] `app/ai/whisper_client.py` — OpenAI Whisper API + faster-whisper / openai-whisper fallback
+- [x] `app/loaders/audio_loader.py` — Updated to use real Whisper transcription (was stub)
+- [x] `load_with_timestamps()` — Returns segments with start/end times
+- [x] API endpoint: `POST /transcribe`
+- [x] Frontend types in `api.ts`
+
+#### [x] 9. Docker Compose Deployment
+- [x] `Dockerfile` — Python 3.12 slim with tesseract + ffmpeg
+- [x] `docker-compose.yml` — api, frontend (nginx), nginx reverse proxy
+- [x] `nginx.conf` — Static serving, API proxy, CORS, large uploads
+- [x] `.dockerignore` — Exclude data, venv, node_modules
+
+#### [x] 10. Library/Collection Management
+- [x] `app/collections/__init__.py`
+- [x] `app/collections/models.py` — Collection, CollectionShare, CollectionManager
+- [x] SQLite-backed CRUD + document membership + sort order + sharing
+- [x] API endpoints for all operations
+- [x] Frontend types in `api.ts`
+
+### Additional Infrastructure
+- [x] Auth endpoints: `POST /auth/register`, `POST /auth/login`, `GET /auth/me`
+- [x] Provider info endpoint: `GET /providers`
+- [x] Hybrid search API endpoint: `POST /hybrid-search`
+- [x] Frontend: Search mode toggle (Hybrid / Semantic / Keyword)
 
 ---
 
@@ -69,3 +106,5 @@ This document tracks progress on implementing 10 new features identified during 
 | Reranker | `cross-encoder/ms-marco-MiniLM-L-6-v2` | ~20ms/doc, good quality, small model |
 | Whisper | OpenAI API (with local fallback) | Best quality, cheap, no GPU needed |
 | LLM Providers | OpenAI + DeepSeek + Ollama | Your requirement |
+| RAG Eval | LLM-as-Judge (faithfulness + relevance + precision + recall) | No ground truth needed |
+| Collections | SQLite with JSON document IDs | No extra DB, supports drag-drop reorder |

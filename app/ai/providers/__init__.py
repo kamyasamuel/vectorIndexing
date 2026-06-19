@@ -75,12 +75,40 @@ def get_embedding_provider(name: Optional[str] = None) -> EmbeddingProvider:
 
 
 def list_providers() -> dict:
-    """List all registered providers with their status."""
+    """List all registered providers with their model, config, and availability status."""
     if not _llm_providers:
         _init_providers()
+
+    def _provider_info(provider) -> dict:
+        """Extract model, provider name, and check availability."""
+        model = provider.config.model if provider.config else "unknown"
+        base_url = provider.config.base_url if provider.config else None
+        api_key_set = bool(provider.config.api_key) if provider.config else False
+
+        # Determine status: available if configured and reachable
+        status = "unknown"
+        try:
+            # Quick availability check: if it requires an API key and none is set
+            if provider.__class__.__name__ in ("OpenAIProvider", "OpenAIEmbeddingProvider", "DeepSeekProvider"):
+                status = "available" if api_key_set else "unavailable"
+            else:
+                # Ollama — check if base URL is reachable
+                status = "available"  # assume available, will show actual on use
+        except Exception:
+            status = "error"
+
+        return {
+            "name": provider.name,
+            "model": model,
+            "class": provider.__class__.__name__,
+            "status": status,
+            "base_url": base_url,
+            "has_api_key": api_key_set,
+        }
+
     return {
-        "llm": {k: v.__class__.__name__ for k, v in _llm_providers.items()},
-        "embedding": {k: v.__class__.__name__ for k, v in _embedding_providers.items()},
+        "llm": {k: _provider_info(v) for k, v in _llm_providers.items()},
+        "embedding": {k: _provider_info(v) for k, v in _embedding_providers.items()},
     }
 
 

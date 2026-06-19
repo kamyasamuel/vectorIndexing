@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { IndexedFile } from '../services/api';
+import { IndexedFile, apiService } from '../services/api';
 import FileIcon from './FileIcon';
 
 interface FileListProps {
@@ -157,7 +157,7 @@ const FileList: React.FC<FileListProps> = ({
                       
                       {file.download_url && (
                         <a
-                          href={file.download_url}
+                          href={apiService.resolveUrl(file.download_url)}
                           download
                           className="p-1.5 rounded-md hover:bg-primary-50 text-secondary-400 hover:text-primary-600 transition-colors"
                           title="Download file"
