@@ -1,10 +1,15 @@
 import argparse
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 from app.core.indexer import DocumentIndexer
 from app.api.routes import router
+from config import UPLOAD_DIR
+
+# Ensure upload directory exists
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 app = FastAPI(title="Textual Data Indexer API")
 

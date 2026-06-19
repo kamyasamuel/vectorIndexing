@@ -61,15 +61,15 @@ vectorIndexing/
 ## Prerequisites
 
 - **Python 3.8+**
-- **Ollama**: Install and run Ollama locally or on a remote server
+- **Ollama**: Install and run Ollama locally or on a remote server (only needed for embeddings)
   ```bash
   # Install Ollama (macOS/Linux)
   curl -fsSL https://ollama.ai/install.sh | sh
   
-  # Pull required models
-  ollama pull granite-embedding:latest
-  ollama pull granite3.3:2b
+  # Pull the embedding model
+  ollama pull nomic-embed-text:latest
   ```
+- **DeepSeek API key** (for question answering): Already configured in `.env`
 
 ## Installation
 
@@ -100,15 +100,15 @@ vectorIndexing/
    ```
 
 4. **Configure environment** (optional):
-   Create a `.env` file in the project root:
+   The project already includes a `.env` file with pre-configured values:
    ```env
    OLLAMA_BASE_URL=http://localhost:11434
-   EMBEDDING_MODEL=granite-embedding:latest
-   COMPLETION_MODEL=granite3.3:2b
-   VECTOR_DB_PATH=data/vector_store
-   METADATA_DB_PATH=data/metadata.db
+   EMBEDDING_MODEL=nomic-embed-text:latest
+   VECTOR_DB_PATH=./data/vector_store
+   METADATA_DB_PATH=./data/metadata.db
    CHUNK_SIZE=512
    CHUNK_OVERLAP=128
+   DEEPSEEK_API_KEY=your_deepseek_api_key_here
    ```
 
 ## Usage
@@ -357,13 +357,13 @@ The system can be configured through environment variables or the `config.py` fi
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
-| `EMBEDDING_MODEL` | `granite-embedding:latest` | Model for generating embeddings |
-| `COMPLETION_MODEL` | `granite3.3:2b` | Model for text generation |
-| `VECTOR_DB_PATH` | `data/vector_store` | Vector database storage path |
-| `METADATA_DB_PATH` | `data/metadata.db` | Metadata database path |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL (for embeddings) |
+| `EMBEDDING_MODEL` | `nomic-embed-text:latest` | Model for generating embeddings |
+| `VECTOR_DB_PATH` | `./data/vector_store` | Vector database storage path |
+| `METADATA_DB_PATH` | `./data/metadata.db` | Metadata database path |
 | `CHUNK_SIZE` | `512` | Size of document chunks (tokens) |
 | `CHUNK_OVERLAP` | `128` | Overlap between chunks (tokens) |
+| `DEEPSEEK_API_KEY` | `""` | API key for DeepSeek (question answering) |
 
 ## Supported File Formats
 
@@ -531,4 +531,5 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - **PyPDF2** for PDF processing
 - **React** and **Framer Motion** for the UI
 - **Tailwind CSS** for styling
-- **Granite Models** for embeddings and completions
+- **nomic-embed-text** for local embeddings via Ollama
+- **DeepSeek** for question answering via API

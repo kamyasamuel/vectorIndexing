@@ -30,7 +30,7 @@ class VectorStore:
         conn = sqlite3.connect(self.metadata_db_path)
         cursor = conn.cursor()
         
-        # Create tables if they don't exist
+        # Create tables if they don't exist — matches MetadataStore schema
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS documents (
             id TEXT PRIMARY KEY,
@@ -38,6 +38,18 @@ class VectorStore:
             metadata TEXT
         )
         ''')
+        
+        # Add missing columns for backwards compatibility
+        for col_def in [
+            "ALTER TABLE documents ADD COLUMN title TEXT",
+            "ALTER TABLE documents ADD COLUMN source TEXT",
+            "ALTER TABLE documents ADD COLUMN file_type TEXT",
+            "ALTER TABLE documents ADD COLUMN created_at TIMESTAMP",
+        ]:
+            try:
+                cursor.execute(col_def)
+            except sqlite3.OperationalError:
+                pass
         
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS chunks (
@@ -96,6 +108,20 @@ class VectorStore:
             
         return chunk_ids
     
+    def get_chunk_count(self) -> int:
+        """Get the total number of chunks in the vector store."""
+        conn = sqlite3.connect(self.metadata_db_path)
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("SELECT COUNT(*) FROM chunks")
+            result = cursor.fetchone()
+            return result[0] if result else 0
+        except Exception:
+            return 0
+        finally:
+            conn.close()
+    
     def add_document(self, document_id: str, content: str, metadata: Dict[str, Any]):
         """Add document metadata to the database."""
         conn = sqlite3.connect(self.metadata_db_path)
@@ -103,7 +129,7 @@ class VectorStore:
         
         try:
             cursor.execute(
-                "INSERT INTO documents VALUES (?, ?, ?)",
+                "INSERT INTO documents (id, content, metadata) VALUES (?, ?, ?)",
                 (document_id, content, json.dumps(metadata))
             )
             conn.commit()
@@ -136,10 +162,13 @@ class VectorStore:
                 if os.path.exists(embedding_file):
                     chunk_embedding = np.load(embedding_file)
                     
-                    # Calculate cosine similarity
-                    similarity = np.dot(query_embedding, chunk_embedding) / (
-                        np.linalg.norm(query_embedding) * np.linalg.norm(chunk_embedding)
-                    )
+                    # Calculate cosine similarity — guard against zero vectors
+                    q_norm = np.linalg.norm(query_embedding)
+                    c_norm = np.linalg.norm(chunk_embedding)
+                    if q_norm == 0 or c_norm == 0:
+                        similarity = 0.0
+                    else:
+                        similarity = float(np.dot(query_embedding, chunk_embedding) / (q_norm * c_norm))
                     
                     results.append({
                         "id": chunk_id,
@@ -159,6 +188,68 @@ class VectorStore:
         finally:
             conn.close()
             
+    def update_document_metadata(self, document_id: str, metadata: Dict[str, Any]):
+        """Update document metadata in the vector store database.
+        
+        Merges the provided metadata keys into the existing metadata JSON.
+        Also updates the top-level source column if 'source' is in metadata.
+        """
+        conn = sqlite3.connect(self.metadata_db_path)
+        cursor = conn.cursor()
+        
+        try:
+            # Get existing metadata
+            cursor.execute("SELECT metadata FROM documents WHERE id = ?", (document_id,))
+            result = cursor.fetchone()
+            
+            if result:
+                existing_metadata = json.loads(result[0])
+                existing_metadata.update(metadata)
+                
+                cursor.execute(
+                    "UPDATE documents SET metadata = ? WHERE id = ?",
+                    (json.dumps(existing_metadata), document_id)
+                )
+                
+                # Also update the source column if provided
+                if "source" in metadata:
+                    cursor.execute(
+                        "UPDATE documents SET source = ? WHERE id = ?",
+                        (metadata["source"], document_id)
+                    )
+                
+                conn.commit()
+                
+        except Exception as e:
+            conn.rollback()
+            raise e
+            
+        finally:
+            conn.close()
+    
+    def delete_document(self, document_id: str) -> bool:
+        """Delete a document and its chunks from the vector store."""
+        conn = sqlite3.connect(self.metadata_db_path)
+        cursor = conn.cursor()
+        
+        try:
+            # Delete chunks first
+            cursor.execute("DELETE FROM chunks WHERE document_id = ?", (document_id,))
+            
+            # Delete document
+            cursor.execute("DELETE FROM documents WHERE id = ?", (document_id,))
+            deleted = cursor.rowcount > 0
+            
+            conn.commit()
+            return deleted
+            
+        except Exception as e:
+            conn.rollback()
+            raise e
+            
+        finally:
+            conn.close()
+    
     def get_document_by_id(self, document_id: str) -> Optional[Dict[str, Any]]:
         """Get document metadata by ID."""
         conn = sqlite3.connect(self.metadata_db_path)

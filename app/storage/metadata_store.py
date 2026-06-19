@@ -21,7 +21,7 @@ class MetadataStore:
         """Initialize SQLite database for metadata."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+
         # Create tables if they don't exist
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS documents (
@@ -30,6 +30,19 @@ class MetadataStore:
             metadata TEXT
         )
         ''')
+
+        # Add missing columns for backwards compatibility with existing databases
+        for col_def in [
+            "ALTER TABLE documents ADD COLUMN title TEXT",
+            "ALTER TABLE documents ADD COLUMN source TEXT",
+            "ALTER TABLE documents ADD COLUMN file_type TEXT",
+            "ALTER TABLE documents ADD COLUMN created_at TIMESTAMP",
+        ]:
+            try:
+                cursor.execute(col_def)
+            except sqlite3.OperationalError:
+                # Column already exists
+                pass
         
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS document_tags (
@@ -47,12 +60,18 @@ class MetadataStore:
         """Add document to the database or update if it already exists."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+
         try:
+            # Extract common metadata fields into dedicated columns
+            title = metadata.get("title", metadata.get("filename", ""))
+            source = metadata.get("source", "")
+            file_type = metadata.get("file_type", "")
+            created_at = metadata.get("created_at", None)
+
             # Using REPLACE to handle the case where the document already exists
             cursor.execute(
-                "INSERT OR REPLACE INTO documents (id, content, metadata) VALUES (?, ?, ?)",
-                (document_id, content, json.dumps(metadata))
+                "INSERT OR REPLACE INTO documents (id, content, metadata, title, source, file_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (document_id, content, json.dumps(metadata), title, source, file_type, created_at)
             )
             
             # Add tags if present
@@ -77,39 +96,40 @@ class MetadataStore:
         """Get document metadata by ID."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+
         try:
             cursor.execute(
-                "SELECT id, title, source, file_type, created_at, metadata FROM documents WHERE id = ?", 
+                "SELECT id, COALESCE(title, ''), COALESCE(source, ''), COALESCE(file_type, ''), COALESCE(created_at, ''), COALESCE(content, ''), COALESCE(metadata, '{}') FROM documents WHERE id = ?", 
                 (document_id,)
             )
             result = cursor.fetchone()
-            
+
             if result:
-                doc_id, title, source, file_type, created_at, metadata_str = result
-                
+                doc_id, title, source, file_type, created_at, content, metadata_str = result
+
                 # Get tags
                 cursor.execute(
                     "SELECT tag FROM document_tags WHERE document_id = ?",
                     (doc_id,)
                 )
                 tags = [row[0] for row in cursor.fetchall()]
-                
+
                 # Parse metadata
-                metadata = json.loads(metadata_str)
+                metadata = json.loads(metadata_str) if metadata_str else {}
                 metadata["tags"] = tags
-                
+
                 return {
                     "id": doc_id,
                     "title": title,
                     "source": source,
                     "file_type": file_type,
                     "created_at": created_at,
+                    "content": content,
                     "metadata": metadata
                 }
-                
+
             return None
-            
+
         finally:
             conn.close()
             
@@ -117,14 +137,14 @@ class MetadataStore:
         """List all documents with pagination."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+
         try:
             cursor.execute(
-                "SELECT id, title, source, file_type, created_at FROM documents ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                "SELECT id, COALESCE(title, ''), COALESCE(source, ''), COALESCE(file_type, ''), COALESCE(created_at, '') FROM documents ORDER BY COALESCE(created_at, '') DESC LIMIT ? OFFSET ?",
                 (limit, offset)
             )
             results = cursor.fetchall()
-            
+
             documents = []
             for row in results:
                 doc_id, title, source, file_type, created_at = row
@@ -135,9 +155,9 @@ class MetadataStore:
                     "file_type": file_type,
                     "created_at": created_at
                 })
-                
+
             return documents
-            
+
         finally:
             conn.close()
             
@@ -168,6 +188,99 @@ class MetadataStore:
                     "source": source,
                     "file_type": file_type,
                     "created_at": created_at
+                })
+                
+            return documents
+            
+        finally:
+            conn.close()
+    
+    def search_by_metadata(self, filters: Dict[str, Any], limit: int = 100) -> List[Dict[str, Any]]:
+        """Search documents by metadata filters using SQL-level filtering.
+        
+        Supports:
+        - Exact match: {"file_type": "pdf"}
+        - Tag match: {"tags": "important"}  (searches document_tags table)
+        - Case-insensitive match: {"file_type__icontains": "pd"}
+        
+        Returns a list of document dicts with id, metadata fields.
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        try:
+            query = """
+                SELECT d.id, d.title, d.source, d.file_type, d.created_at, d.metadata
+                FROM documents d
+            """
+            conditions = []
+            params = []
+            needs_tag_join = False
+            
+            for key, value in filters.items():
+                # Handle tag filters specially (stored in join table)
+                if key == "tags":
+                    needs_tag_join = True
+                    if isinstance(value, list):
+                        placeholders = ",".join("?" for _ in value)
+                        conditions.append(f"d.id IN (SELECT document_id FROM document_tags WHERE tag IN ({placeholders}))")
+                        params.extend(value)
+                    else:
+                        conditions.append("d.id IN (SELECT document_id FROM document_tags WHERE tag = ?)")
+                        params.append(value)
+                    continue
+                
+                # Handle case-insensitive contains
+                if key.endswith("__icontains"):
+                    actual_key = key[:-len("__icontains")]
+                    conditions.append(f"LOWER(d.metadata) LIKE LOWER(?)")
+                    params.append(f"%{value}%")
+                    continue
+                
+                # Handle case-insensitive exact match
+                if key.endswith("__iexact"):
+                    actual_key = key[:-len("__iexact")]
+                    # JSON extraction with lower() for case-insensitive comparison
+                    conditions.append(f"LOWER(JSON_EXTRACT(d.metadata, '$.\"{actual_key}\"')) = LOWER(?)")
+                    params.append(str(value))
+                    continue
+                
+                # Default: exact match via JSON extraction
+                conditions.append(f"JSON_EXTRACT(d.metadata, '$.\"{key}\"') = ?")
+                params.append(str(value))
+            
+            if needs_tag_join:
+                query += " JOIN document_tags dt ON d.id = dt.document_id "
+            
+            if conditions:
+                query += " WHERE " + " AND ".join(conditions)
+            
+            query += " GROUP BY d.id ORDER BY d.created_at DESC LIMIT ?"
+            params.append(limit)
+            
+            cursor.execute(query, params)
+            results = cursor.fetchall()
+            
+            documents = []
+            for row in results:
+                doc_id, title, source, file_type, created_at, metadata_str = row
+                metadata = json.loads(metadata_str) if metadata_str else {}
+                
+                # Get tags
+                cursor.execute(
+                    "SELECT tag FROM document_tags WHERE document_id = ?",
+                    (doc_id,)
+                )
+                tags = [r[0] for r in cursor.fetchall()]
+                metadata["tags"] = tags
+                
+                documents.append({
+                    "id": doc_id,
+                    "title": title,
+                    "source": source,
+                    "file_type": file_type,
+                    "created_at": created_at,
+                    "metadata": metadata
                 })
                 
             return documents
