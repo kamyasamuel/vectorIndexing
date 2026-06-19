@@ -6,6 +6,7 @@ requests>=2.31.0
 PyPDF2>=3.0.0  # For PDF loading (replaced PyMuPDF)
 python-docx>=1.1.0  # For DOCX loading
 pydantic>=2.5.0
+pydantic-settings>=2.0.0  # For enhanced configuration management
 setuptools>=68.0.0  # Required for Python 3.12+
 pytesseract>=0.3.10  # For OCR text extraction
 pdf2image>=1.16.3  # For converting PDF to images
@@ -13,6 +14,21 @@ pillow>=10.0.0  # For image processing
 beautifulsoup4>=4.12.0  # For HTML parsing
 python-multipart>=0.0.6  # For form data handling
 psutil>=5.9.0  # For system resource monitoring
+
+# FAISS vector search engine
+faiss-cpu>=1.7.4
+
+# Authentication
+python-jose[cryptography]>=3.3.0  # JWT token handling
+passlib[bcrypt]>=1.7.4  # Password hashing
+bcrypt>=4.0.0  # bcrypt implementation
+
+# BM25 keyword search
+rank-bm25>=0.2.2
+
+# Cross-encoder reranker for advanced RAG
+sentence-transformers>=2.2.0
+
 # Note: You'll also need to install tesseract-ocr on your system:
 # Ubuntu/Debian: sudo apt-get install -y tesseract-ocr
 # macOS: brew install tesseract
